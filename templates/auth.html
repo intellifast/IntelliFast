@@ -1,5 +1,16 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>IntelliFast — fasting, made human</title><link rel="stylesheet" href="{{ url_for('static',filename='app.css') }}"></head>
-<body class="auth-body">
+<body class="auth-body {% if mode=='welcome' %}landing-body{% endif %}">
+{% if mode=='welcome' %}
+<main class="landing-page">
+  <header class="landing-header"><a class="brand" href="/"><span class="brand-mark">if</span><strong>IntelliFast</strong></a><a class="landing-signin" href="{{url_for('login')}}">Sign in</a></header>
+  <section class="landing-hero">
+    <div class="landing-copy"><span class="eyebrow light">Your rhythm, gently guided</span><h1>Fast with clarity.<br>Live with <em>energy.</em></h1><p>A thoughtful fasting companion that helps you build a routine around your real life—not the other way around.</p><div class="landing-actions"><a class="btn landing-primary" href="{{url_for('register')}}">Start your journey <span>→</span></a><a class="landing-text-link" href="{{url_for('login')}}">I already have an account</a></div><div class="landing-trust"><span>✓ Private by default</span><span>✓ Your data stays exportable</span><span>✓ AI guidance, grounded in your progress</span></div></div>
+    <div class="landing-visual"><div class="visual-glow"></div><article class="landing-phone"><header><span class="mini-logo">◔</span><span>Today</span><i>•••</i></header><div class="phone-greeting"><small>Good morning</small><b>Your next window</b></div><div class="landing-timer"><div><strong>16:00</strong><small>hours</small></div></div><span class="pill lime">Ready when you are</span><button>Start fasting window</button><div class="phone-stats"><span><b>4</b><small>day streak</small></span><span><b>67h</b><small>this month</small></span></div></article><article class="floating-insight"><span>✦</span><div><b>Lumi noticed a pattern</b><p>Your 8 PM starts feel most consistent.</p></div></article></div>
+  </section>
+  <section class="landing-benefits"><span class="eyebrow">Everything you need, without the noise</span><h2>A calmer way to stay consistent.</h2><div><article><i>◷</i><b>Track every window</b><p>A live timer, fasting stages and a history you can actually edit.</p></article><article><i>⌁</i><b>Understand your rhythm</b><p>See streaks, patterns and progress drawn from your real records.</p></article><article><i>✦</i><b>Talk to Lumi</b><p>Your AI buddy offers personal encouragement based on your fasting data.</p></article></div><a class="btn primary" href="{{url_for('register')}}">Create my free account →</a></section>
+  <footer class="landing-footer"><a class="brand" href="/"><span class="brand-mark">if</span><strong>IntelliFast</strong></a><p>Habit support and education—not medical advice.</p></footer>
+</main>
+{% else %}
 <main class="auth-shell">
   <section class="auth-story">
     <a class="brand brand-light" href="/"><span class="brand-mark">if</span><strong>IntelliFast</strong></a>
@@ -10,9 +21,6 @@
   <section class="auth-panel">
     <div class="mobile-brand"><a class="brand" href="/"><span class="brand-mark">if</span><strong>IntelliFast</strong></a></div>
     {% with messages=get_flashed_messages(with_categories=true) %}{% for cat,msg in messages %}<div class="toast {{cat}}">{{msg}}</div>{% endfor %}{% endwith %}
-    {% if mode=='welcome' %}
-      <div class="auth-form intro"><span class="eyebrow">Welcome to your next good habit</span><h2>Feel better in your own rhythm.</h2><p>Track fasting windows, notice patterns, and build consistency with less noise and more encouragement.</p><a class="btn primary wide" href="{{url_for('register')}}">Create my account <span>→</span></a><a class="btn subtle wide" href="{{url_for('login')}}">I already have an account</a><div class="trust-row"><span>✓ Private by default</span><span>✓ Your data, exportable</span></div></div>
-    {% else %}
       <form class="auth-form" method="post">
         <a class="back-link" href="/">← Back</a><span class="eyebrow">{% if mode=='register' %}Start your journey{% elif mode=='forgot' %}Account recovery{% else %}Welcome back{% endif %}</span>
         <h2>{% if mode=='register' %}Create your space.{% elif mode in ['forgot','reset'] %}Reset your password.{% else %}Pick up your rhythm.{% endif %}</h2>
@@ -23,6 +31,7 @@
         <button class="btn primary wide" type="submit">{% if mode=='register' %}Create account{% elif mode=='forgot' %}Prepare reset link{% elif mode=='reset' %}Save new password{% else %}Sign in{% endif %} <span>→</span></button>
         <p class="auth-switch">{% if mode=='register' %}Already a member? <a href="{{url_for('login')}}">Sign in</a>{% elif mode=='login' %}New here? <a href="{{url_for('register')}}">Create an account</a>{% else %}<a href="{{url_for('login')}}">Return to sign in</a>{% endif %}</p>
       </form>
-    {% endif %}
   </section>
-</main><script>document.querySelectorAll('.peek').forEach(b=>b.onclick=()=>{const i=b.previousElementSibling;i.type=i.type==='password'?'text':'password';b.textContent=i.type==='password'?'Show':'Hide'})</script></body></html>
+</main>
+{% endif %}
+<script>document.querySelectorAll('.peek').forEach(b=>b.onclick=()=>{const i=b.previousElementSibling;i.type=i.type==='password'?'text':'password';b.textContent=i.type==='password'?'Show':'Hide'})</script></body></html>
