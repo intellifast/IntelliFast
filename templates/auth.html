@@ -1,0 +1,28 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>IntelliFast — fasting, made human</title><link rel="stylesheet" href="{{ url_for('static',filename='app.css') }}"></head>
+<body class="auth-body">
+<main class="auth-shell">
+  <section class="auth-story">
+    <a class="brand brand-light" href="/"><span class="brand-mark">if</span><strong>IntelliFast</strong></a>
+    <div class="story-copy"><span class="eyebrow light">Your rhythm, gently guided</span><h1>Fast with clarity.<br>Live with <em>energy.</em></h1><p>A thoughtful companion for building a fasting routine that actually fits your life.</p></div>
+    <div class="mini-preview"><div class="mini-ring"><span>16<small>hours</small></span></div><div><b>Today’s rhythm</b><p>12h 24m complete</p><div class="mini-bar"><i></i></div></div></div>
+    <p class="health-note">IntelliFast supports habit tracking, not medical diagnosis. Check with a qualified clinician if fasting may not be right for you.</p>
+  </section>
+  <section class="auth-panel">
+    <div class="mobile-brand"><a class="brand" href="/"><span class="brand-mark">if</span><strong>IntelliFast</strong></a></div>
+    {% with messages=get_flashed_messages(with_categories=true) %}{% for cat,msg in messages %}<div class="toast {{cat}}">{{msg}}</div>{% endfor %}{% endwith %}
+    {% if mode=='welcome' %}
+      <div class="auth-form intro"><span class="eyebrow">Welcome to your next good habit</span><h2>Feel better in your own rhythm.</h2><p>Track fasting windows, notice patterns, and build consistency with less noise and more encouragement.</p><a class="btn primary wide" href="{{url_for('register')}}">Create my account <span>→</span></a><a class="btn subtle wide" href="{{url_for('login')}}">I already have an account</a><div class="trust-row"><span>✓ Private by default</span><span>✓ Your data, exportable</span></div></div>
+    {% else %}
+      <form class="auth-form" method="post">
+        <a class="back-link" href="/">← Back</a><span class="eyebrow">{% if mode=='register' %}Start your journey{% elif mode=='forgot' %}Account recovery{% else %}Welcome back{% endif %}</span>
+        <h2>{% if mode=='register' %}Create your space.{% elif mode in ['forgot','reset'] %}Reset your password.{% else %}Pick up your rhythm.{% endif %}</h2>
+        {% if mode=='register' %}<label>Full name<input name="full_name" required autocomplete="name" placeholder="How should we know you?"></label>{% endif %}
+        {% if mode!='reset' %}<label>Email address<input type="email" name="email" required autocomplete="email" placeholder="you@example.com"></label>{% endif %}
+        {% if mode!='forgot' %}<label>{{'New password' if mode=='reset' else 'Password'}}<span class="label-note">{% if mode in ['register','reset'] %}8+ characters{% endif %}</span><div class="password-wrap"><input type="password" name="password" required minlength="8" autocomplete="{% if mode in ['register','reset'] %}new-password{% else %}current-password{% endif %}" placeholder="••••••••"><button type="button" class="peek" aria-label="Show password">Show</button></div></label>{% endif %}
+        {% if mode=='login' %}<a class="text-link forgot" href="{{url_for('forgot')}}">Forgot password?</a>{% endif %}
+        <button class="btn primary wide" type="submit">{% if mode=='register' %}Create account{% elif mode=='forgot' %}Prepare reset link{% elif mode=='reset' %}Save new password{% else %}Sign in{% endif %} <span>→</span></button>
+        <p class="auth-switch">{% if mode=='register' %}Already a member? <a href="{{url_for('login')}}">Sign in</a>{% elif mode=='login' %}New here? <a href="{{url_for('register')}}">Create an account</a>{% else %}<a href="{{url_for('login')}}">Return to sign in</a>{% endif %}</p>
+      </form>
+    {% endif %}
+  </section>
+</main><script>document.querySelectorAll('.peek').forEach(b=>b.onclick=()=>{const i=b.previousElementSibling;i.type=i.type==='password'?'text':'password';b.textContent=i.type==='password'?'Show':'Hide'})</script></body></html>
