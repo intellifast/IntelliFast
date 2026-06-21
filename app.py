@@ -17,6 +17,7 @@ from calendar import monthrange
 from datetime import datetime, timedelta, date
 from functools import wraps
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, Response, abort, flash, g, jsonify, redirect, render_template, request, session, url_for, send_file
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -146,6 +147,11 @@ def init_db():
       read INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS import_previews (
+      id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, token TEXT UNIQUE NOT NULL,
+      rows_json TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS password_resets (
       id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, token TEXT UNIQUE NOT NULL,
       expires_at TEXT NOT NULL, used INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -214,7 +220,27 @@ def init_db():
     for name, definition in migrations:
         if name not in columns:
             conn.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
+    fast_columns = {row[1] for row in conn.execute("PRAGMA table_info(fasts)")}
+    for name, definition in [
+        ("target_reached_at", "TEXT"), ("mood", "TEXT DEFAULT ''"),
+        ("mood_note", "TEXT DEFAULT ''"), ("completed_early", "INTEGER NOT NULL DEFAULT 0")
+    ]:
+        if name not in fast_columns:
+            conn.execute(f"ALTER TABLE fasts ADD COLUMN {name} {definition}")
+    reminder_columns = {row[1] for row in conn.execute("PRAGMA table_info(reminders)")}
+    for name, definition in [
+        ("channel", "TEXT NOT NULL DEFAULT 'in_app'"),
+        ("last_sent_key", "TEXT DEFAULT ''"), ("created_at", "TEXT")
+    ]:
+        if name not in reminder_columns:
+            conn.execute(f"ALTER TABLE reminders ADD COLUMN {name} {definition}")
+    conn.execute("UPDATE reminders SET created_at=CURRENT_TIMESTAMP WHERE created_at IS NULL")
+    notification_columns = {row[1] for row in conn.execute("PRAGMA table_info(notifications)")}
+    for name, definition in [("category", "TEXT DEFAULT 'general'"), ("read_at", "TEXT")]:
+        if name not in notification_columns:
+            conn.execute(f"ALTER TABLE notifications ADD COLUMN {name} {definition}")
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,description) VALUES(1,'Production security and administration foundation')")
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,description) VALUES(2,'Timer reminders and history completion')")
     conn.execute("INSERT OR IGNORE INTO system_settings(key,value) VALUES('ai_enabled','1')")
     if conn.execute("SELECT COUNT(*) FROM resources").fetchone()[0] == 0:
         conn.executemany("""INSERT INTO resources(id,title,category,summary,reading_time,source_name,external_url,review_date)
@@ -345,7 +371,7 @@ def load_user():
         flash("This account is currently suspended. Contact support if you believe this is a mistake.", "error")
         return redirect(url_for("login"))
     session.setdefault("csrf_token", secrets.token_urlsafe(32))
-    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and request.endpoint != "scheduled_reminder_dispatch":
         supplied = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
         if not supplied and request.is_json:
             supplied = (request.get_json(silent=True) or {}).get("csrf_token")
@@ -415,10 +441,29 @@ def parse_dt(value):
     return datetime.fromisoformat(value) if value else None
 
 
+def user_now(user=None):
+    user = user or getattr(g, "user", None)
+    timezone = user["timezone"] if user and user["timezone"] else "UTC"
+    try:
+        return datetime.now(ZoneInfo(timezone)).replace(tzinfo=None, microsecond=0)
+    except ZoneInfoNotFoundError:
+        return datetime.utcnow().replace(microsecond=0)
+
+
 def duration_hours(row, now=None):
     start = parse_dt(row["started_at"])
-    end = parse_dt(row["ended_at"]) if row["ended_at"] else (parse_dt(row["paused_at"]) if row["status"] == "paused" else (now or datetime.now()))
+    if row["status"] == "scheduled" and start > (now or user_now()):
+        return 0
+    end = parse_dt(row["ended_at"]) if row["ended_at"] else (parse_dt(row["paused_at"]) if row["status"] == "paused" else (now or user_now()))
     return max(0, (end - start).total_seconds() - (row["paused_seconds"] or 0)) / 3600
+
+
+def expected_end(row):
+    start = parse_dt(row["started_at"])
+    paused = int(row["paused_seconds"] or 0)
+    if row["status"] == "paused" and row["paused_at"]:
+        paused += max(0, int((user_now() - parse_dt(row["paused_at"])).total_seconds()))
+    return start + timedelta(hours=float(row["target_hours"]), seconds=paused)
 
 
 def fast_rows(user_id, start=None, end=None):
@@ -457,11 +502,56 @@ def calculate_stats(rows):
 
 
 def current_fast():
-    return db().execute("SELECT * FROM fasts WHERE user_id=? AND status IN ('active','paused') ORDER BY id DESC LIMIT 1", (g.user["id"],)).fetchone()
+    now = user_now()
+    db().execute("UPDATE fasts SET status='active' WHERE user_id=? AND status='scheduled' AND started_at<=?", (g.user["id"], now.isoformat()))
+    row = db().execute("SELECT * FROM fasts WHERE user_id=? AND status IN ('scheduled','active','paused') ORDER BY id DESC LIMIT 1", (g.user["id"],)).fetchone()
+    if row and row["status"] == "active" and duration_hours(row, now) >= float(row["target_hours"]) and not row["target_reached_at"]:
+        reached = expected_end(row).isoformat()
+        db().execute("UPDATE fasts SET target_reached_at=? WHERE id=?", (reached, row["id"]))
+        db().execute("INSERT INTO notifications(user_id,title,body,category) VALUES(?,?,?,'achievement')",
+                     (g.user["id"], "Fasting target reached", f"You reached your {row['plan']} target. Continue only if you feel well."))
+        row = db().execute("SELECT * FROM fasts WHERE id=?", (row["id"],)).fetchone()
+    db().commit()
+    return row
 
 
-def notify(title, body):
-    db().execute("INSERT INTO notifications(user_id,title,body) VALUES(?,?,?)", (g.user["id"], title, body))
+def notify(title, body, category="general", user_id=None):
+    db().execute("INSERT INTO notifications(user_id,title,body,category) VALUES(?,?,?,?)", (user_id or g.user["id"], title, body, category))
+
+
+def reminder_message(kind):
+    return {
+        "Fast start": "Your planned fasting window is ready when you are.",
+        "Fast end": "Your fasting target is approaching. Check in with how you feel.",
+        "Eating window": "A gentle reminder to plan a balanced eating window.",
+        "Hydration": "A small hydration check-in for your day.",
+        "Daily check-in": "Take a moment to notice your energy and routine today.",
+        "Streak": "Consistency grows quietly. Check in with your current rhythm."
+    }.get(kind, "Your IntelliFast reminder is due.")
+
+
+def dispatch_due_reminders(user_id=None, send_email=True):
+    users = db().execute("SELECT * FROM users WHERE email_verified=1 AND is_suspended=0" + (" AND id=?" if user_id else ""), ((user_id,) if user_id else ())).fetchall()
+    delivered = 0
+    for user in users:
+        now = user_now(user); day = now.strftime("%a"); minute = now.strftime("%Y-%m-%dT%H:%M")
+        reminders = db().execute("SELECT * FROM reminders WHERE user_id=? AND enabled=1", (user["id"],)).fetchall()
+        for reminder in reminders:
+            days = {x.strip() for x in (reminder["days"] or "").split(",")}
+            due_key = f"{reminder['id']}:{minute}"
+            if day not in days or reminder["time"] != now.strftime("%H:%M") or reminder["last_sent_key"] == due_key:
+                continue
+            body = (reminder["message"] or reminder_message(reminder["kind"])).strip()
+            notify(reminder["kind"], body, "reminder", user["id"])
+            if send_email and reminder["channel"] in ("email", "both"):
+                try:
+                    send_transactional_email(user["email"], f"IntelliFast · {reminder['kind']}", reminder["kind"], body, "Open IntelliFast", f"{os.environ.get('APP_BASE_URL','').rstrip('/')}/dashboard")
+                except RuntimeError:
+                    pass
+            db().execute("UPDATE reminders SET last_sent_key=? WHERE id=?", (due_key, reminder["id"]))
+            delivered += 1
+    db().commit()
+    return delivered
 
 
 @app.route("/health")
@@ -630,6 +720,7 @@ def onboarding():
 
 
 def app_context(view, **extra):
+    dispatch_due_reminders(g.user["id"], send_email=False)
     rows = fast_rows(g.user["id"])
     week_start = date.today() - timedelta(days=date.today().weekday())
     week = [r for r in rows if parse_dt(r["started_at"]).date() >= week_start]
@@ -639,8 +730,9 @@ def app_context(view, **extra):
         d = date.today() - timedelta(days=i)
         total = sum(duration_hours(r) for r in rows if parse_dt(r["started_at"]).date() == d and r["status"] in ("completed", "broken"))
         days.append({"label": d.strftime("%a")[0], "date": d.isoformat(), "hours": round(total,1)})
-    notifications = db().execute("SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 6", (g.user["id"],)).fetchall()
-    context = dict(view=view, plans=PLANS, fast=current_fast(), rows=rows, stats=stats, week_stats=calculate_stats(week), days=days, notifications=notifications)
+    fast = current_fast()
+    notifications = db().execute("SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 20", (g.user["id"],)).fetchall()
+    context = dict(view=view, plans=PLANS, fast=fast, rows=rows, stats=stats, week_stats=calculate_stats(week), days=days, notifications=notifications)
     context.update(extra)
     return render_template("app.html", **context)
 
@@ -780,7 +872,7 @@ def timer():
     if fast:
         elapsed = duration_hours(fast)
         stage = max((s for s in STAGES if s[0] <= elapsed), key=lambda x: x[0])
-    return app_context("timer", stage=stage, stages=STAGES)
+    return app_context("timer", stage=stage, stages=STAGES, expected_end=expected_end(fast) if fast else None)
 
 
 @app.post("/fast/start")
@@ -789,12 +881,21 @@ def start_fast():
     if current_fast():
         return jsonify(error="You already have a fast in progress."), 400
     plan = request.form.get("plan", g.user["default_plan"])
-    hours = float(request.form.get("hours") or PLANS.get(plan, 16))
+    if plan not in PLANS: return jsonify(error="Choose a valid fasting plan."), 400
+    try: hours = float(request.form.get("hours") or PLANS[plan])
+    except (TypeError, ValueError): return jsonify(error="Choose a valid fasting duration."), 400
     if not 1 <= hours <= 72:
         return jsonify(error="Choose a fasting duration between 1 and 72 hours."), 400
-    start = request.form.get("started_at") or datetime.now().replace(microsecond=0).isoformat()
-    cur = db().execute("INSERT INTO fasts(user_id,started_at,target_hours,plan,status) VALUES(?,?,?,?, 'active')", (g.user["id"], start, hours, plan))
-    notify("Fast started", f"Your {plan} fast is underway. One calm hour at a time.")
+    now = user_now()
+    try:
+        start_dt = parse_dt(request.form.get("started_at")) if request.form.get("started_at") else now
+    except ValueError:
+        return jsonify(error="Choose a valid start date and time."), 400
+    if start_dt < now - timedelta(minutes=5) or start_dt > now + timedelta(days=30):
+        return jsonify(error="Schedule the start between now and 30 days from today."), 400
+    status = "scheduled" if start_dt > now + timedelta(seconds=30) else "active"
+    cur = db().execute("INSERT INTO fasts(user_id,started_at,target_hours,plan,status) VALUES(?,?,?,?,?)", (g.user["id"], start_dt.isoformat(), hours, plan, status))
+    notify("Fast scheduled" if status == "scheduled" else "Fast started", f"Your {plan} fast {'is scheduled' if status == 'scheduled' else 'is underway'}. One calm hour at a time.", "timer")
     db().commit()
     return jsonify(ok=True, id=cur.lastrowid, redirect=url_for("timer"))
 
@@ -805,20 +906,45 @@ def fast_action(fast_id):
     row = db().execute("SELECT * FROM fasts WHERE id=? AND user_id=?", (fast_id, g.user["id"])).fetchone()
     if not row: return jsonify(error="Fast not found."), 404
     action = request.form.get("action")
-    now = datetime.now().replace(microsecond=0)
-    if action == "pause" and row["status"] == "active":
+    now = user_now()
+    if action == "cancel" and row["status"] == "scheduled":
+        db().execute("DELETE FROM fasts WHERE id=?", (fast_id,))
+        notify("Scheduled fast cancelled", "The planned window was removed.", "timer")
+    elif action == "start_now" and row["status"] == "scheduled":
+        db().execute("UPDATE fasts SET status='active',started_at=? WHERE id=?", (now.isoformat(), fast_id))
+        notify("Fast started", f"Your {row['plan']} fast is underway.", "timer")
+    elif action == "pause" and row["status"] == "active":
         db().execute("UPDATE fasts SET status='paused',paused_at=? WHERE id=?", (now.isoformat(), fast_id))
     elif action == "resume" and row["status"] == "paused":
         paused = int((now - parse_dt(row["paused_at"])).total_seconds())
         db().execute("UPDATE fasts SET status='active',paused_at=NULL,paused_seconds=paused_seconds+? WHERE id=?", (paused, fast_id))
-    elif action in ("complete", "break"):
+    elif action in ("complete", "break") and row["status"] in ("active", "paused"):
         status = "completed" if action == "complete" else "broken"
+        elapsed = duration_hours(row, now)
+        if action == "complete" and elapsed < float(row["target_hours"]) and request.form.get("confirm_early") != "1":
+            return jsonify(error="This fast has not reached its target yet. Confirm an early completion to continue.", needs_confirmation=True), 409
         reason = request.form.get("reason", "")
         notes = request.form.get("notes", "")
-        db().execute("UPDATE fasts SET status=?,ended_at=?,notes=?,broken_reason=?,paused_at=NULL WHERE id=?", (status, now.isoformat(), notes, reason, fast_id))
-        notify("Fast completed" if status == "completed" else "Fast saved", "Your effort has been added to your history.")
+        mood = request.form.get("mood", "")[:24]
+        mood_note = request.form.get("mood_note", "")[:500]
+        db().execute("""UPDATE fasts SET status=?,ended_at=?,notes=?,broken_reason=?,paused_at=NULL,
+                      mood=?,mood_note=?,completed_early=? WHERE id=?""",
+                     (status, now.isoformat(), notes, reason, mood, mood_note, int(status == "completed" and elapsed < float(row["target_hours"])), fast_id))
+        notify("Fast completed" if status == "completed" else "Fast saved", "Your effort and check-in were added to your history.", "achievement" if status == "completed" else "timer")
     else: return jsonify(error="That action is not available right now."), 400
     db().commit(); return jsonify(ok=True, redirect=url_for("timer"))
+
+
+@app.get("/api/timer/status")
+@login_required
+def timer_status():
+    fast = current_fast()
+    if not fast:
+        return jsonify(active=False)
+    now = user_now(); elapsed = duration_hours(fast, now)
+    return jsonify(active=True, id=fast["id"], status=fast["status"], elapsed_seconds=round(elapsed*3600),
+                   target_seconds=round(float(fast["target_hours"])*3600), expected_end=expected_end(fast).isoformat(),
+                   target_reached=bool(fast["target_reached_at"]), server_now=now.isoformat())
 
 
 @app.route("/history")
@@ -829,7 +955,35 @@ def history():
     if status: rows = [r for r in rows if r["status"] == status]
     if plan: rows = [r for r in rows if r["plan"] == plan]
     if q: rows = [r for r in rows if q in (r["notes"] or "").lower()]
-    return app_context("history", filtered_rows=rows)
+    try:
+        minimum = float(request.args["min_hours"]) if request.args.get("min_hours") else None
+        maximum = float(request.args["max_hours"]) if request.args.get("max_hours") else None
+    except ValueError:
+        minimum = maximum = None
+    if minimum is not None: rows = [r for r in rows if duration_hours(r) >= minimum]
+    if maximum is not None: rows = [r for r in rows if duration_hours(r) <= maximum]
+    page = max(1, request.args.get("page", 1, type=int)); per_page = 10
+    total = len(rows); pages = max(1, (total + per_page - 1)//per_page)
+    page = min(page, pages); visible = rows[(page-1)*per_page:page*per_page]
+    query = request.args.to_dict(); query.pop("page", None)
+    previous_url = url_for("history", **query, page=page-1) if page > 1 else ""
+    next_url = url_for("history", **query, page=page+1) if page < pages else ""
+    month_value = request.args.get("month") or date.today().strftime("%Y-%m")
+    try: month_start = datetime.strptime(month_value, "%Y-%m").date().replace(day=1)
+    except ValueError: month_start = date.today().replace(day=1); month_value = month_start.strftime("%Y-%m")
+    offset = month_start.weekday(); days_in_month = monthrange(month_start.year, month_start.month)[1]
+    outcome_by_day = {}
+    for row in fast_rows(g.user["id"], month_start.isoformat(), month_start.replace(day=days_in_month).isoformat()):
+        d = parse_dt(row["started_at"]).day
+        outcome_by_day[d] = "completed" if row["status"] == "completed" else "broken" if row["status"] == "broken" else "active"
+    calendar_days = [None]*offset + [{"day": d, "outcome": outcome_by_day.get(d, "rest")} for d in range(1, days_in_month+1)]
+    preview = None
+    if request.args.get("preview"):
+        record = db().execute("SELECT * FROM import_previews WHERE token=? AND user_id=?", (request.args["preview"], g.user["id"])).fetchone()
+        if record: preview = {"token": record["token"], "rows": json.loads(record["rows_json"])}
+    return app_context("history", filtered_rows=visible, total_rows=total, page=page, pages=pages,
+                       previous_url=previous_url, next_url=next_url, calendar_days=calendar_days,
+                       calendar_month=month_start, import_preview=preview)
 
 
 @app.post("/fast/manual")
@@ -839,8 +993,11 @@ def manual_fast():
         start = datetime.fromisoformat(request.form["started_at"]); end = datetime.fromisoformat(request.form["ended_at"])
         if end <= start: raise ValueError
         plan = request.form["plan"]
-        db().execute("""INSERT INTO fasts(user_id,started_at,ended_at,target_hours,plan,status,notes,broken_reason)
-                      VALUES(?,?,?,?,?,?,?,?)""", (g.user["id"], start.isoformat(), end.isoformat(), float(request.form.get("target_hours") or PLANS.get(plan,16)), plan, request.form["status"], request.form.get("notes",""), request.form.get("broken_reason","")))
+        status = request.form["status"]
+        target = float(request.form.get("target_hours") or PLANS.get(plan,16))
+        if plan not in PLANS or status not in ("completed","broken") or not 1 <= target <= 72: raise ValueError
+        db().execute("""INSERT INTO fasts(user_id,started_at,ended_at,target_hours,plan,status,notes,broken_reason,share_buddies)
+                      VALUES(?,?,?,?,?,?,?,?,?)""", (g.user["id"], start.isoformat(), end.isoformat(), target, plan, status, request.form.get("notes","")[:1000], request.form.get("broken_reason","")[:200], int(request.form.get("share_buddies")=="1")))
         db().commit(); flash("Fast added to your history.", "success")
     except (ValueError, KeyError): flash("The end time must be after the start time.", "error")
     return redirect(url_for("history"))
@@ -852,8 +1009,11 @@ def edit_fast(fast_id):
     try:
         start = datetime.fromisoformat(request.form["started_at"]); end = datetime.fromisoformat(request.form["ended_at"])
         if end <= start: raise ValueError
-        db().execute("UPDATE fasts SET started_at=?,ended_at=?,plan=?,target_hours=?,status=?,notes=?,broken_reason=? WHERE id=? AND user_id=?",
-          (start.isoformat(),end.isoformat(),request.form["plan"],float(request.form.get("target_hours") or PLANS.get(request.form["plan"],16)),request.form["status"],request.form.get("notes",""),request.form.get("broken_reason",""),fast_id,g.user["id"]))
+        plan = request.form["plan"]; status = request.form["status"]
+        target = float(request.form.get("target_hours") or PLANS.get(plan,16))
+        if plan not in PLANS or status not in ("completed","broken") or not 1 <= target <= 72: raise ValueError
+        db().execute("UPDATE fasts SET started_at=?,ended_at=?,plan=?,target_hours=?,status=?,notes=?,broken_reason=?,share_buddies=? WHERE id=? AND user_id=?",
+          (start.isoformat(),end.isoformat(),plan,target,status,request.form.get("notes","")[:1000],request.form.get("broken_reason","")[:200],int(request.form.get("share_buddies")=="1"),fast_id,g.user["id"]))
         db().commit(); flash("Fast updated.", "success")
     except ValueError: flash("The end time must be after the start time.", "error")
     return redirect(url_for("history"))
@@ -894,6 +1054,74 @@ def batch_import():
             count += 1; day += timedelta(days=1)
         db().commit(); flash(f"Imported {count} fasting records.", "success")
     except (ValueError, KeyError): flash("Choose a valid date range up to one year.", "error")
+    return redirect(url_for("history"))
+
+
+@app.post("/history/import-preview")
+@login_required
+def import_preview():
+    upload = request.files.get("csv_file")
+    if not upload or not upload.filename.lower().endswith(".csv"):
+        flash("Choose a CSV file to preview.", "error"); return redirect(url_for("history"))
+    try:
+        text = upload.stream.read(512_001).decode("utf-8-sig")
+        if len(text.encode("utf-8")) > 512_000: raise ValueError("The CSV must be smaller than 500 KB.")
+        reader = csv.DictReader(io.StringIO(text)); parsed = []
+        if not reader.fieldnames: raise ValueError("The CSV has no header row.")
+        normalized = {re.sub(r"[^a-z]", "", h.lower()): h for h in reader.fieldnames}
+        start_key = normalized.get("start") or normalized.get("startedat")
+        end_key = normalized.get("end") or normalized.get("endedat")
+        if not start_key or not end_key: raise ValueError("CSV headers must include Start and End.")
+        for number, raw in enumerate(reader, 2):
+            if len(parsed) >= 500: raise ValueError("Import up to 500 rows at a time.")
+            try:
+                start = parse_dt(raw.get(start_key, "").strip()); end = parse_dt(raw.get(end_key, "").strip())
+                if not start or not end or end <= start: raise ValueError
+                plan = (raw.get(normalized.get("plan", ""), "") or "Custom").strip()
+                status = (raw.get(normalized.get("status", ""), "completed") or "completed").strip().lower()
+                if status not in ("completed", "broken"): status = "completed"
+                duplicate = bool(db().execute("SELECT 1 FROM fasts WHERE user_id=? AND started_at=? AND ended_at=?", (g.user["id"], start.isoformat(), end.isoformat())).fetchone())
+                parsed.append({"line": number, "start": start.isoformat(timespec="minutes"), "end": end.isoformat(timespec="minutes"),
+                               "plan": plan if plan in PLANS else "Custom", "target": float(raw.get(normalized.get("targethours", ""), "") or PLANS.get(plan, (end-start).total_seconds()/3600)),
+                               "status": status, "notes": (raw.get(normalized.get("notes", ""), "") or "")[:1000], "duplicate": duplicate, "error": ""})
+            except (ValueError, TypeError):
+                parsed.append({"line": number, "start": raw.get(start_key, ""), "end": raw.get(end_key, ""), "plan": "Custom", "target": 0, "status": "completed", "notes": "", "duplicate": False, "error": "Invalid start or end time"})
+        if not parsed: raise ValueError("The CSV contains no data rows.")
+    except (UnicodeDecodeError, csv.Error, ValueError) as exc:
+        flash(str(exc), "error"); return redirect(url_for("history"))
+    token = secrets.token_urlsafe(24)
+    db().execute("DELETE FROM import_previews WHERE user_id=?", (g.user["id"],))
+    db().execute("INSERT INTO import_previews(user_id,token,rows_json) VALUES(?,?,?)", (g.user["id"], token, json.dumps(parsed)))
+    db().commit(); return redirect(url_for("history", preview=token))
+
+
+@app.post("/history/import-commit/<token>")
+@login_required
+def import_commit(token):
+    record = db().execute("SELECT * FROM import_previews WHERE token=? AND user_id=?", (token, g.user["id"])).fetchone()
+    if not record: abort(404)
+    rows = json.loads(record["rows_json"]); imported = skipped = failed = 0
+    try:
+        for index, original in enumerate(rows):
+            if request.form.get(f"include_{index}") != "1": skipped += 1; continue
+            try:
+                start = parse_dt(request.form.get(f"start_{index}", original["start"])); end = parse_dt(request.form.get(f"end_{index}", original["end"]))
+                if not start or not end or end <= start: raise ValueError
+                if db().execute("SELECT 1 FROM fasts WHERE user_id=? AND started_at=? AND ended_at=?", (g.user["id"], start.isoformat(), end.isoformat())).fetchone():
+                    skipped += 1; continue
+                plan = request.form.get(f"plan_{index}", original["plan"])
+                target = float(request.form.get(f"target_{index}", original["target"]))
+                status = request.form.get(f"status_{index}", original["status"])
+                if plan not in PLANS or status not in ("completed","broken") or not 1 <= target <= 72: raise ValueError
+                db().execute("""INSERT INTO fasts(user_id,started_at,ended_at,target_hours,plan,status,notes)
+                              VALUES(?,?,?,?,?,?,?)""", (g.user["id"], start.isoformat(), end.isoformat(), target, plan, status,
+                              request.form.get(f"notes_{index}", original["notes"])[:1000]))
+                imported += 1
+            except (ValueError, TypeError): failed += 1
+        db().execute("DELETE FROM import_previews WHERE id=?", (record["id"],)); db().commit()
+    except sqlite3.Error:
+        db().rollback(); flash("Nothing was imported because the database could not save the batch.", "error"); return redirect(url_for("history"))
+    flash(f"Import complete: {imported} added, {skipped} skipped, {failed} invalid.", "success" if not failed else "error")
     return redirect(url_for("history"))
 
 
@@ -1224,13 +1452,69 @@ def settings():
 @app.post("/reminders")
 @login_required
 def add_reminder():
-    db().execute("INSERT INTO reminders(user_id,kind,time,days,message) VALUES(?,?,?,?,?)",(g.user["id"],request.form["kind"],request.form["time"],request.form.get("days","Every day"),request.form.get("message",""))); db().commit(); flash("Reminder added.","success"); return redirect(url_for("settings"))
+    kind = request.form.get("kind", "Daily check-in")
+    time_value = request.form.get("time", "")
+    days = ",".join(x for x in request.form.getlist("days") if x in ("Mon","Tue","Wed","Thu","Fri","Sat","Sun"))
+    channel = request.form.get("channel", "in_app")
+    valid_kinds = ("Fast start","Fast end","Eating window","Hydration","Daily check-in","Streak")
+    try: datetime.strptime(time_value, "%H:%M")
+    except ValueError: time_value = ""
+    if kind not in valid_kinds or not time_value or not days or channel not in ("in_app","email","both"):
+        flash("Choose a valid time, at least one day, and a delivery method.", "error"); return redirect(url_for("settings"))
+    db().execute("INSERT INTO reminders(user_id,kind,time,days,message,channel) VALUES(?,?,?,?,?,?)",
+                 (g.user["id"], kind, time_value, days, request.form.get("message", "")[:500], channel))
+    db().commit(); flash("Reminder added.","success"); return redirect(url_for("settings"))
 
 
 @app.post("/reminders/<int:rid>/toggle")
 @login_required
 def toggle_reminder(rid):
     db().execute("UPDATE reminders SET enabled=1-enabled WHERE id=? AND user_id=?",(rid,g.user["id"])); db().commit(); return redirect(url_for("settings"))
+
+
+@app.post("/reminders/<int:rid>/edit")
+@login_required
+def edit_reminder(rid):
+    time_value = request.form.get("time", ""); channel = request.form.get("channel", "in_app"); kind = request.form.get("kind","Daily check-in")
+    days = ",".join(x for x in request.form.getlist("days") if x in ("Mon","Tue","Wed","Thu","Fri","Sat","Sun"))
+    try: datetime.strptime(time_value, "%H:%M")
+    except ValueError: time_value = ""
+    if kind not in ("Fast start","Fast end","Eating window","Hydration","Daily check-in","Streak") or not time_value or not days or channel not in ("in_app","email","both"):
+        flash("Choose valid reminder settings.", "error"); return redirect(url_for("settings"))
+    db().execute("UPDATE reminders SET kind=?,time=?,days=?,message=?,channel=?,last_sent_key='' WHERE id=? AND user_id=?",
+                 (kind, time_value, days, request.form.get("message","")[:500], channel, rid, g.user["id"]))
+    db().commit(); flash("Reminder updated.", "success"); return redirect(url_for("settings"))
+
+
+@app.post("/reminders/<int:rid>/delete")
+@login_required
+def delete_reminder(rid):
+    db().execute("DELETE FROM reminders WHERE id=? AND user_id=?", (rid, g.user["id"])); db().commit()
+    flash("Reminder deleted.", "success"); return redirect(url_for("settings"))
+
+
+@app.get("/api/notifications")
+@login_required
+def notification_feed():
+    dispatch_due_reminders(g.user["id"], send_email=False)
+    after = request.args.get("after", 0, type=int)
+    rows = db().execute("SELECT * FROM notifications WHERE user_id=? AND id>? ORDER BY id", (g.user["id"], after)).fetchall()
+    return jsonify(notifications=[dict(r) for r in rows])
+
+
+@app.post("/notifications/read")
+@login_required
+def mark_notifications_read():
+    now = user_now().isoformat()
+    db().execute("UPDATE notifications SET read=1,read_at=? WHERE user_id=? AND read=0", (now, g.user["id"])); db().commit()
+    return jsonify(ok=True)
+
+
+@app.post("/tasks/dispatch-reminders")
+def scheduled_reminder_dispatch():
+    expected = os.environ.get("CRON_SECRET", "")
+    if not expected or not secrets.compare_digest(request.headers.get("X-Cron-Secret", ""), expected): abort(403)
+    return jsonify(ok=True, delivered=dispatch_due_reminders(send_email=True))
 
 
 @app.post("/account/delete-history")
@@ -1298,7 +1582,16 @@ def maintenance_command():
     conn.execute("DELETE FROM usage_events WHERE created_at<datetime('now','-90 days')")
     conn.execute("DELETE FROM ai_usage WHERE created_at<datetime('now','-90 days')")
     conn.execute("DELETE FROM app_errors WHERE resolved=1 AND created_at<datetime('now','-90 days')")
+    conn.execute("DELETE FROM import_previews WHERE created_at<datetime('now','-1 day')")
+    conn.execute("DELETE FROM notifications WHERE read=1 AND created_at<datetime('now','-180 days')")
     conn.commit(); conn.close(); click.echo("Operational records pruned successfully.")
+
+
+@app.cli.command("dispatch-reminders")
+def dispatch_reminders_command():
+    """Deliver reminders that are due in each user's timezone."""
+    with app.app_context():
+        click.echo(f"Delivered {dispatch_due_reminders(send_email=True)} reminder(s).")
 
 
 @app.template_filter("dt")
@@ -1314,7 +1607,7 @@ def fmt_hours(value):
 @app.context_processor
 def helpers():
     return dict(duration_hours=duration_hours, now=datetime.now, today=date.today,
-                csrf_token=lambda: session.setdefault("csrf_token",secrets.token_urlsafe(32)))
+                expected_end=expected_end, csrf_token=lambda: session.setdefault("csrf_token",secrets.token_urlsafe(32)))
 
 
 init_db()

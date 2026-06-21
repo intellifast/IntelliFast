@@ -2,14 +2,15 @@
 
 This document is the source of truth for what is complete, partial, missing, or blocked. Update it whenever production behavior changes.
 
-Status key: `DONE`, `PARTIAL`, `IN PROGRESS`, `NOT STARTED`, `BLOCKED BY CONFIG`
+Status key: `DONE`, `PARTIAL`, `IN PROGRESS`, `READY FOR DEPLOYMENT`, `NOT STARTED`, `BLOCKED BY CONFIG`
 
 Last reviewed: 21 June 2026
 
 ## Current priorities
 
-1. Production account and security foundation — **IN PROGRESS**
-2. Administrator and operations system — **IN PROGRESS**
+1. Fasting timer completion — **READY FOR DEPLOYMENT**
+2. Reminders and notifications — **READY FOR DEPLOYMENT**
+3. History and bulk import — **READY FOR DEPLOYMENT**
 
 ## 1. Account security and production foundation — IN PROGRESS
 
@@ -17,15 +18,15 @@ Last reviewed: 21 June 2026
 - Automated foundation tests: passing.
 - Deployment dependency: configure Brevo, a verified sender, `APP_ENV`, `APP_BASE_URL` and a stable `SECRET_KEY`; then complete live email and mobile verification.
 
-## 2. Fasting timer — PARTIAL
+## 2. Fasting timer — READY FOR DEPLOYMENT
 
-- Working: start, pause, resume, complete, break, protocols, custom duration, persistence and stage display.
-- Missing: prominent remaining time, correct expected end timestamp, target-reached handling, early-completion confirmation, paused-end correction, scheduled start, celebration, persistent achievement event, mood check-in, background/browser notifications.
+- Implemented: immediate and scheduled starts, start-now/cancel controls, prominent remaining time, corrected expected end including pauses, persisted target-reached event, idempotent achievement notification, confirmed early completion, pause/resume, mood check-in, notes/reasons, browser target alerts and responsive controls.
+- Automated timer workflow and regression tests: passing. Awaiting live deployment and mobile verification before `DONE`.
 
-## 3. History and bulk import — PARTIAL
+## 3. History and bulk import — READY FOR DEPLOYMENT
 
-- Working: list history, manual add, edit, delete, duplicate, basic filters and recurring batch insertion.
-- Missing: real calendar and timeline views, data-driven heatmap, duration filter, visibility/reason editing, pagination, CSV upload, preview/edit/remove before import, per-entry outcomes, duplicate detection and rollback.
+- Implemented: editable timeline, data-driven monthly calendar, date/status/plan/duration/note filters, visibility and reason editing, pagination, recurring insertion, CSV upload, row-level preview/edit/remove selection, validation, duplicate detection, per-batch outcomes and transactional database rollback.
+- Automated history, filtering, pagination and CSV workflow tests: passing. Awaiting live deployment and mobile verification before `DONE`.
 
 ## 4. Dashboard — PARTIAL
 
@@ -57,10 +58,10 @@ Last reviewed: 21 June 2026
 - Working: personalised chat using active fast, recent fasts, notes, plan, streak and prior conversation; safety prompt and hourly limit.
 - Missing: goals/reminders/achievements/buddy context, confirmed app actions, structured recommendations, multiple conversations, granular deletion, stronger moderation, usage controls, provider fallback and admin enable/disable.
 
-## 10. Reminders and notifications — PARTIAL
+## 10. Reminders and notifications — READY FOR DEPLOYMENT
 
-- Working: reminder records, toggles, in-app notification records.
-- Missing: actual scheduler, browser/email delivery, weekday/timezone execution, edit/delete, read state, category preferences, history cleanup.
+- Implemented: timezone/weekday scheduler, authenticated external scheduler endpoint, server CLI dispatcher, Brevo email delivery, live in-app polling, browser permission and alerts, add/edit/delete/toggle, read state, delivery-channel choice, idempotent sends and old-history cleanup.
+- Automated dispatch/idempotence/email/edit/delete tests: passing. Deployment still requires a private `CRON_SECRET` and one-minute scheduler; then live email and mobile browser verification before `DONE`.
 
 ## 11. Learning resources — PARTIAL
 

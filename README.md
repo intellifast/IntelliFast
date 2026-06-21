@@ -41,7 +41,10 @@ SECRET_KEY=a-long-random-secret
 BREVO_API_KEY=your-brevo-api-key
 MAIL_FROM_EMAIL=a-sender-verified-in-brevo@example.com
 MAIL_FROM_NAME=IntelliFast
+CRON_SECRET=a-separate-long-random-secret
 ```
+
+For dependable reminder delivery, invoke `POST /tasks/dispatch-reminders` every minute from a scheduler and include the configured secret in the `X-Cron-Secret` header. The same job can be run from a server console with `flask --app app dispatch-reminders`. In-app reminders are also checked whenever the user opens IntelliFast, while email delivery continues independently through the scheduled job.
 
 Promote an existing, verified account to administrator from the server console:
 
@@ -53,4 +56,4 @@ The private `/admin` area provides user controls, registration/activity metrics,
 
 ## Verification
 
-The app exposes `GET /health`. Functional checks should cover registration, onboarding, timer start/pause/resume/complete, manual history, imports, analytics pages, goals, buddies, settings, and CSV export.
+The app exposes `GET /health`. Functional checks should cover registration, onboarding, immediate and scheduled timer starts, pause/resume/target/early-completion states, reminder dispatch, notification read state, manual history, staged CSV import, filters and pagination, analytics pages, goals, buddies, settings, and CSV export.
