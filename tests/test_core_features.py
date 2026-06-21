@@ -113,6 +113,30 @@ class CoreFeatureTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self.db_row("SELECT COUNT(*) AS n FROM fasts WHERE notes='Imported'")["n"], 1)
 
+    def test_ai_monthly_quota_counts_successes_and_admin_can_allocate(self):
+        with patch.object(application, "gemini_reply", side_effect=RuntimeError("Provider unavailable")):
+            failed = self.client.post("/api/ai-buddy", json={"message":"Will this count?"}, headers={"X-CSRF-Token":self._csrf()})
+            self.assertEqual(failed.status_code, 503)
+            self.assertEqual(self.db_row("SELECT COUNT(*) AS n FROM ai_usage WHERE status='success'")["n"], 0)
+        with patch.object(application, "gemini_reply", return_value="A short supportive reply."):
+            for index in range(5):
+                response = self.client.post("/api/ai-buddy", json={"message":f"Message {index}"}, headers={"X-CSRF-Token":self._csrf()})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.get_json()["quota"]["remaining"], 4-index)
+            limited = self.client.post("/api/ai-buddy", json={"message":"One more"}, headers={"X-CSRF-Token":self._csrf()})
+            self.assertEqual(limited.status_code, 429)
+        conn = sqlite3.connect(application.DB_PATH)
+        uid = conn.execute("SELECT id FROM users").fetchone()[0]
+        conn.execute("UPDATE users SET is_admin=1 WHERE id=?",(uid,)); conn.commit(); conn.close()
+        set_limit = self.post(f"/admin/users/{uid}/ai-quota", {"action":"set_limit", "amount":["8","3"]})
+        self.assertEqual(set_limit.status_code, 302)
+        grant = self.post(f"/admin/users/{uid}/ai-quota", {"action":"grant_extra", "amount":["8","3"], "note":"Testing"})
+        self.assertEqual(grant.status_code, 302)
+        with application.app.test_request_context("/"):
+            application.g.user = application.db().execute("SELECT * FROM users WHERE id=?",(uid,)).fetchone()
+            quota = application.ai_quota(uid, application.g.user)
+            self.assertEqual((quota["allowance"],quota["used"],quota["remaining"]),(11,5,6))
+
 
 if __name__ == "__main__":
     unittest.main()

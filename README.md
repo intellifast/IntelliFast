@@ -54,6 +54,8 @@ flask --app app promote-admin --email account@example.com
 
 The private `/admin` area provides user controls, registration/activity metrics, resource management, error review, AI availability and usage, consistent SQLite backups, operational status and an administrator audit trail.
 
+Lumi defaults to five successful AI replies per user per UTC calendar month. Administrators can change the global default under Operations, set a recurring per-user limit, or grant extra messages for the current month from Users. Provider failures do not consume allowance.
+
 ## Verification
 
 The app exposes `GET /health`. Functional checks should cover registration, onboarding, immediate and scheduled timer starts, pause/resume/target/early-completion states, reminder dispatch, notification read state, manual history, staged CSV import, filters and pagination, analytics pages, goals, buddies, settings, and CSV export.

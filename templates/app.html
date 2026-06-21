@@ -34,17 +34,18 @@
     <section class="ai-layout">
       <aside class="ai-profile-card">
         <div class="lumi-orb"><span>✦</span><i></i></div><span class="presence"><i></i> Here with you</span><h2>Lumi</h2><p>Your calm fasting companion. Lumi can read your fasting summaries, but never your email or password.</p>
+        <div class="ai-quota-card"><div><span>Monthly messages</span><b id="aiQuotaText">{{ai_quota.remaining}} remaining</b></div><div class="quota-bar"><i id="aiQuotaBar" style="width:{{[100,(ai_quota.used*100/ai_quota.allowance if ai_quota.allowance else 100)]|min}}%"></i></div><small>{{ai_quota.used}} of {{ai_quota.allowance}} used · resets next calendar month{% if ai_quota.bonus %} · includes {{ai_quota.bonus}} extra{% endif %}</small></div>
         <div class="ai-knows"><span class="eyebrow">What Lumi can help with</span><div><i>⌁</i><span><b>Notice patterns</b><small>Reflect on timing and consistency</small></span></div><div><i>◷</i><span><b>Plan gently</b><small>Prepare for your next window</small></span></div><div><i>♡</i><span><b>Stay encouraged</b><small>Support without judgment</small></span></div></div>
         <div class="ai-safety">Lumi offers educational habit support, not medical advice. Stop fasting and seek appropriate care if you feel unwell.</div>
       </aside>
       <article class="chat-card">
-        <header><div><span class="avatar lumi-avatar">L</span><div><b>Lumi</b><small>Your personal fasting companion</small></div></div><span class="ai-config {{'ready' if ai_configured else 'missing'}}">{{'Ready' if ai_configured else 'Setup needed'}}</span></header>
+        <header><div><span class="avatar lumi-avatar">L</span><div><b>Lumi</b><small>Your personal fasting companion</small></div></div><span class="ai-config {{'ready' if ai_configured and ai_quota.remaining else 'missing'}}">{{'Ready' if ai_configured and ai_quota.remaining else 'Monthly limit reached' if ai_configured else 'Setup needed'}}</span></header>
         <div class="chat-messages" id="chatMessages">
           {% if ai_messages %}{% for message in ai_messages %}<div class="chat-message {{message.role}}"><div class="message-avatar">{{g.user.display_name[:1]|upper if message.role=='user' else '✦'}}</div><div><p>{{message.content}}</p><small>{{message.created_at|dt('%I:%M %p')}}</small></div></div>{% endfor %}
           {% else %}<div class="chat-welcome"><div class="lumi-mini">✦</div><h2>Hi {{g.user.display_name}}, I’m Lumi.</h2><p>I can help you reflect on your fasting routine, prepare for a window, or make sense of your recent patterns. What’s on your mind?</p></div>{% endif %}
         </div>
         <div class="starter-prompts" id="starterPrompts"><button data-prompt="How has my fasting been going lately?">How am I doing?</button><button data-prompt="Help me prepare for my next fast.">Plan my next fast</button><button data-prompt="What pattern do you notice in my recent fasts?">Notice a pattern</button></div>
-        <form class="chat-composer" id="aiChatForm"><textarea id="aiMessage" maxlength="1000" rows="1" placeholder="Message Lumi…" {% if not ai_configured %}disabled{% endif %}></textarea><button type="submit" aria-label="Send message" {% if not ai_configured %}disabled{% endif %}>↑</button><small>Enter to send · Shift+Enter for a new line</small></form>
+        <form class="chat-composer" id="aiChatForm"><textarea id="aiMessage" maxlength="1000" rows="1" placeholder="{{'Monthly message limit reached' if not ai_quota.remaining else 'Message Lumi…'}}" {% if not ai_configured or not ai_quota.remaining %}disabled{% endif %}></textarea><button type="submit" aria-label="Send message" {% if not ai_configured or not ai_quota.remaining %}disabled{% endif %}>↑</button><small>{% if ai_quota.remaining %}Enter to send · Shift+Enter for a new line{% else %}Your allowance resets next month. An administrator can grant extra messages.{% endif %}</small></form>
         {% if not ai_configured %}<div class="ai-setup-note"><b>Lumi is temporarily unavailable.</b><span>The AI connection has not been configured on this server yet.</span></div>{% endif %}
       </article>
     </section>

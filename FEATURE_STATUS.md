@@ -55,8 +55,8 @@ Last reviewed: 21 June 2026
 
 ## 9. AI Buddy — PARTIAL
 
-- Working: personalised chat using active fast, recent fasts, notes, plan, streak and prior conversation; safety prompt and hourly limit.
-- Missing: goals/reminders/achievements/buddy context, confirmed app actions, structured recommendations, multiple conversations, granular deletion, stronger moderation, usage controls, provider fallback and admin enable/disable.
+- Working: personalised chat using active fast, recent fasts, notes, plan, streak and prior conversation; safety prompt, hourly abuse limit, five-message monthly default, per-user recurring allowances, current-month administrator grants, user-visible remaining quota, failure-safe accounting and administrator enable/disable.
+- Missing: goals/reminders/achievements/buddy context, confirmed app actions, structured recommendations, multiple conversations, granular deletion, stronger moderation and provider fallback.
 
 ## 10. Reminders and notifications — READY FOR DEPLOYMENT
 
