@@ -12,6 +12,10 @@ Last reviewed: 21 June 2026
 2. Reminders and notifications — **READY FOR DEPLOYMENT**
 3. History and bulk import — **READY FOR DEPLOYMENT**
 
+## Pending deployment tasks
+
+- **External reminder scheduler:** connect the protected `POST /tasks/dispatch-reminders` endpoint to cron-job.org at a one-minute interval using the private `X-Cron-Secret` header. Until configured, in-app/browser reminders run while IntelliFast is open, but background email reminders may be delayed.
+
 ## 1. Account security and production foundation — IN PROGRESS
 
 - Implemented locally: verified registration, transactional reset email, CSRF protection, database-backed authentication rate limits, strong password policy, session revocation after password changes, security headers, production cookie mode, verified email changes, signature/size-validated profile photos, Terms, Privacy Policy, central error capture, idempotent schema migrations, consistent backups and password-confirmed deletion.
