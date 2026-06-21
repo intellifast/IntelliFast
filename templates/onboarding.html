@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><title>Set your rhythm — IntelliFast</title><link rel="stylesheet" href="{{url_for('static',filename='app.css')}}"></head>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="csrf-token" content="{{csrf_token()}}"><title>Set your rhythm — IntelliFast</title><link rel="stylesheet" href="{{url_for('static',filename='app.css')}}"></head>
 <body class="onboard-body"><main class="onboard-shell">
 <header><a class="brand" href="/"><span class="brand-mark">if</span><strong>IntelliFast</strong></a><div class="step-count">Step <b id="stepNo">1</b> of 5</div></header>
 {% with messages=get_flashed_messages(with_categories=true) %}{% for cat,msg in messages %}<div class="toast {{cat}}">{{msg}}</div>{% endfor %}{% endwith %}

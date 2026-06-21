@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><title>IntelliFast — fasting, made human</title><link rel="stylesheet" href="{{ url_for('static',filename='app.css') }}"></head>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="csrf-token" content="{{csrf_token()}}"><title>IntelliFast — fasting, made human</title><link rel="stylesheet" href="{{ url_for('static',filename='app.css') }}"></head>
 <body class="auth-body {% if mode=='welcome' %}landing-body{% endif %}">
 {% if mode=='welcome' %}
 <main class="landing-page">
@@ -21,17 +21,22 @@
   <section class="auth-panel">
     <div class="mobile-brand"><a class="brand" href="/"><span class="brand-mark">if</span><strong>IntelliFast</strong></a></div>
     {% with messages=get_flashed_messages(with_categories=true) %}{% for cat,msg in messages %}<div class="toast {{cat}}">{{msg}}</div>{% endfor %}{% endwith %}
+    {% if mode=='check_email' %}
+      <div class="auth-form check-email"><a class="back-link" href="{{url_for('login')}}">← Back to sign in</a><span class="eyebrow">One secure step</span><h2>Check your inbox.</h2><p>We sent a verification link to <b>{{email}}</b>. Open it within 24 hours to activate your account.</p><form method="post" action="{{url_for('resend_verification')}}"><input type="hidden" name="email" value="{{email}}"><button class="btn subtle wide">Resend verification email</button></form></div>
+    {% else %}
       <form class="auth-form" method="post">
         <a class="back-link" href="/">← Back</a><span class="eyebrow">{% if mode=='register' %}Start your journey{% elif mode=='forgot' %}Account recovery{% else %}Welcome back{% endif %}</span>
         <h2>{% if mode=='register' %}Create your space.{% elif mode in ['forgot','reset'] %}Reset your password.{% else %}Pick up your rhythm.{% endif %}</h2>
         {% if mode=='register' %}<label>Full name<input name="full_name" required autocomplete="name" placeholder="How should we know you?"></label>{% endif %}
         {% if mode!='reset' %}<label>Email address<input type="email" name="email" required autocomplete="email" placeholder="you@example.com"></label>{% endif %}
-        {% if mode!='forgot' %}<label>{{'New password' if mode=='reset' else 'Password'}}<span class="label-note">{% if mode in ['register','reset'] %}8+ characters{% endif %}</span><div class="password-wrap"><input type="password" name="password" required minlength="8" autocomplete="{% if mode in ['register','reset'] %}new-password{% else %}current-password{% endif %}" placeholder="••••••••"><button type="button" class="peek" aria-label="Show password">Show</button></div></label>{% endif %}
+        {% if mode!='forgot' %}<label>{{'New password' if mode=='reset' else 'Password'}}<span class="label-note">{% if mode in ['register','reset'] %}10+ chars, upper/lower/number{% endif %}</span><div class="password-wrap"><input type="password" name="password" required minlength="10" autocomplete="{% if mode in ['register','reset'] %}new-password{% else %}current-password{% endif %}" placeholder="••••••••••"><button type="button" class="peek" aria-label="Show password">Show</button></div></label>{% endif %}
+        {% if mode=='register' %}<label class="terms-check"><input type="checkbox" name="accept_terms" value="yes" required><span>I agree to the <a href="{{url_for('terms')}}" target="_blank">Terms</a> and acknowledge the <a href="{{url_for('privacy')}}" target="_blank">Privacy Policy</a>.</span></label>{% endif %}
         {% if mode=='login' %}<a class="text-link forgot" href="{{url_for('forgot')}}">Forgot password?</a>{% endif %}
-        <button class="btn primary wide" type="submit">{% if mode=='register' %}Create account{% elif mode=='forgot' %}Prepare reset link{% elif mode=='reset' %}Save new password{% else %}Sign in{% endif %} <span>→</span></button>
+        <button class="btn primary wide" type="submit">{% if mode=='register' %}Create account{% elif mode=='forgot' %}Send reset email{% elif mode=='reset' %}Save new password{% else %}Sign in{% endif %} <span>→</span></button>
         <p class="auth-switch">{% if mode=='register' %}Already a member? <a href="{{url_for('login')}}">Sign in</a>{% elif mode=='login' %}New here? <a href="{{url_for('register')}}">Create an account</a>{% else %}<a href="{{url_for('login')}}">Return to sign in</a>{% endif %}</p>
       </form>
+    {% endif %}
   </section>
 </main>
 {% endif %}
-<script>document.querySelectorAll('.peek').forEach(b=>b.onclick=()=>{const i=b.previousElementSibling;i.type=i.type==='password'?'text':'password';b.textContent=i.type==='password'?'Show':'Hide'})</script></body></html>
+<script>const csrf=document.querySelector('meta[name="csrf-token"]')?.content;document.querySelectorAll('form[method="post"]').forEach(f=>{if(!f.querySelector('[name="csrf_token"]')){const i=document.createElement('input');i.type='hidden';i.name='csrf_token';i.value=csrf;f.append(i)}});document.querySelectorAll('.peek').forEach(b=>b.onclick=()=>{const i=b.previousElementSibling;i.type=i.type==='password'?'text':'password';b.textContent=i.type==='password'?'Show':'Hide'})</script></body></html>

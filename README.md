@@ -30,7 +30,26 @@ $env:SECRET_KEY = "replace-with-a-long-random-secret"
 waitress-serve --host=127.0.0.1 --port=5000 app:app
 ```
 
-Put a reverse proxy such as IIS or nginx in front for TLS, rate limiting, and static-file caching. The local password-reset flow displays its one-hour reset URL in the success message; connect that URL to your transactional email provider before a public launch.
+Put a reverse proxy such as IIS or nginx in front for TLS and static-file caching. Registration and password reset are intentionally unavailable when transactional email is not configured; secure links are never displayed in the interface.
+
+Production account flows require these environment values:
+
+```text
+APP_ENV=production
+APP_BASE_URL=https://your-domain.example
+SECRET_KEY=a-long-random-secret
+BREVO_API_KEY=your-brevo-api-key
+MAIL_FROM_EMAIL=a-sender-verified-in-brevo@example.com
+MAIL_FROM_NAME=IntelliFast
+```
+
+Promote an existing, verified account to administrator from the server console:
+
+```bash
+flask --app app promote-admin --email account@example.com
+```
+
+The private `/admin` area provides user controls, registration/activity metrics, resource management, error review, AI availability and usage, consistent SQLite backups, operational status and an administrator audit trail.
 
 ## Verification
 
