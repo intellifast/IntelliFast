@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from urllib.parse import urlparse
 
 import app as application
 from werkzeug.security import generate_password_hash
@@ -48,13 +47,28 @@ class ProductionFoundationTests(unittest.TestCase):
             response = self.client.post("/register", data={"full_name":"New User","email":"new@example.com",
                 "password":"SecurePass1","accept_terms":"yes","csrf_token":token})
             self.assertEqual(response.status_code, 200)
-            verification_url = sender.call_args.args[-1]
-        verify_path = urlparse(verification_url).path
-        self.assertEqual(self.client.get(verify_path).status_code, 302)
+            otp = sender.call_args.kwargs["otp_code"]
+        token = self.csrf("/login")
+        self.assertEqual(self.client.post("/verify-email", data={"email":"new@example.com","otp":otp,"csrf_token":token}).status_code, 302)
         token = self.csrf("/onboarding")
         response = self.client.post("/onboarding", data={"goal":"General wellness","experience":"Beginner","plan":"16:8",
             "start_time":"20:00","reminder_time":"19:45","timezone":"Asia/Calcutta","csrf_token":token})
         self.assertEqual(response.status_code, 302)
+
+    def test_verification_otp_rejects_wrong_code_and_resend_replaces_it(self):
+        token = self.csrf("/register")
+        with patch.object(application, "send_transactional_email") as sender:
+            self.client.post("/register", data={"full_name":"New User","email":"new@example.com",
+                "password":"SecurePass1","accept_terms":"yes","csrf_token":token})
+            first_otp = sender.call_args.kwargs["otp_code"]
+            token = self.csrf("/login")
+            response = self.client.post("/resend-verification", data={"email":"new@example.com","csrf_token":token})
+            self.assertEqual(response.status_code, 200)
+            second_otp = sender.call_args.kwargs["otp_code"]
+        token = self.csrf("/login")
+        self.assertEqual(self.client.post("/verify-email", data={"email":"new@example.com","otp":first_otp,"csrf_token":token}).status_code, 400)
+        token = self.csrf("/login")
+        self.assertEqual(self.client.post("/verify-email", data={"email":"new@example.com","otp":second_otp,"csrf_token":token}).status_code, 302)
 
     def test_csrf_and_security_headers(self):
         self.create_user(); self.login()

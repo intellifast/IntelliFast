@@ -30,7 +30,7 @@ $env:SECRET_KEY = "replace-with-a-long-random-secret"
 waitress-serve --host=127.0.0.1 --port=5000 app:app
 ```
 
-Put a reverse proxy such as IIS or nginx in front for TLS and static-file caching. Registration and password reset are intentionally unavailable when transactional email is not configured; secure links are never displayed in the interface.
+Put a reverse proxy such as IIS or nginx in front for TLS and static-file caching. Registration and password reset are intentionally unavailable when transactional email is not configured. Registration uses a 6-digit email code that expires after 10 minutes; password resets continue to use a one-hour secure link.
 
 Production account flows require these environment values:
 

@@ -292,20 +292,43 @@ def create_email_token(user_id, purpose, new_email="", hours=24):
     return raw
 
 
-def send_transactional_email(to_email, subject, heading, body, action_label, action_url):
+def verification_otp_digest(user_id, code):
+    value = f"{app.config['SECRET_KEY']}:{user_id}:{code}".encode()
+    return hashlib.sha256(value).hexdigest()
+
+
+def create_verification_otp():
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def store_verification_otp(user_id, code, minutes=10):
+    digest = verification_otp_digest(user_id, code)
+    db().execute("UPDATE email_tokens SET used=1 WHERE user_id=? AND purpose='verify' AND used=0", (user_id,))
+    db().execute("INSERT INTO email_tokens(user_id,purpose,token_hash,expires_at) VALUES(?,'verify',?,?)",
+                 (user_id, digest, (datetime.now()+timedelta(minutes=minutes)).isoformat()))
+    db().commit()
+
+
+def send_transactional_email(to_email, subject, heading, body, action_label="", action_url="", otp_code=""):
     api_key = os.environ.get("BREVO_API_KEY", "").strip()
     sender_email = os.environ.get("MAIL_FROM_EMAIL", "").strip()
     sender_name = os.environ.get("MAIL_FROM_NAME", "IntelliFast").strip()
     if not api_key or not sender_email:
         raise RuntimeError("Transactional email is not configured.")
     safe_body = body.replace("<", "&lt;").replace(">", "&gt;")
+    action_html = (f"<div style='font-size:34px;letter-spacing:9px;font-weight:800;margin:22px 0;"
+                   f"padding:18px 20px;background:#f8f5f2;border-radius:14px;text-align:center'>{otp_code}</div>"
+                   if otp_code else
+                   f"<a href='{action_url}' style='display:inline-block;background:#181716;color:#fff;text-decoration:none;"
+                   f"padding:14px 20px;border-radius:12px;font-weight:700;margin:16px 0'>{action_label}</a>")
     html = f"""<!doctype html><html><body style='margin:0;background:#f8f5f2;font-family:Arial,sans-serif;color:#181716'>
     <div style='max-width:560px;margin:35px auto;background:#fff;border-radius:22px;padding:34px'>
     <div style='font-weight:800;font-size:20px;margin-bottom:28px'>IntelliFast</div><h1 style='font-size:27px'>{heading}</h1>
-    <p style='line-height:1.65;color:#625d58'>{safe_body}</p><a href='{action_url}' style='display:inline-block;background:#181716;color:#fff;text-decoration:none;padding:14px 20px;border-radius:12px;font-weight:700;margin:16px 0'>{action_label}</a>
+    <p style='line-height:1.65;color:#625d58'>{safe_body}</p>{action_html}
     <p style='font-size:11px;color:#8e8781;line-height:1.5'>If you did not request this, you can safely ignore this message.</p></div></body></html>"""
     payload = json.dumps({"sender":{"name":sender_name,"email":sender_email},"to":[{"email":to_email}],
-                          "subject":subject,"htmlContent":html}).encode("utf-8")
+                          "subject":subject,"htmlContent":html,
+                          "textContent":f"{heading}\n\n{body}\n\n{otp_code or action_url}"}).encode("utf-8")
     req = urllib.request.Request("https://api.brevo.com/v3/smtp/email", data=payload, method="POST",
                                  headers={"Content-Type":"application/json","api-key":api_key})
     try:
@@ -598,12 +621,12 @@ def register():
                 cur = db().execute("INSERT INTO users(email,password_hash,full_name,display_name,email_verified,updated_at) VALUES(?,?,?,?,0,?)",
                                    (email, generate_password_hash(password), name, name.split()[0], datetime.now().isoformat()))
                 db().commit()
-                token = create_email_token(cur.lastrowid, "verify", hours=24)
-                verify_url = f"{app_base_url()}{url_for('verify_email', token=token)}"
+                otp = create_verification_otp()
                 try:
-                    send_transactional_email(email, "Verify your IntelliFast email", "Confirm your email",
-                                             "Welcome to IntelliFast. Confirm this email address to activate your account.",
-                                             "Verify email", verify_url)
+                    send_transactional_email(email, "Your IntelliFast verification code", "Confirm your email",
+                                             "Enter this 6-digit code in IntelliFast within 10 minutes to activate your account.",
+                                             otp_code=otp)
+                    store_verification_otp(cur.lastrowid, otp)
                 except RuntimeError:
                     db().execute("DELETE FROM users WHERE id=?", (cur.lastrowid,)); db().commit()
                     flash("Account creation is temporarily unavailable because email delivery is not configured.", "error")
@@ -677,8 +700,31 @@ def reset_password(token):
     return render_template("auth.html", mode="reset")
 
 
+@app.post("/verify-email")
+def verify_email_otp():
+    enforce_rate_limit("verify-email", 8, 15)
+    email = request.form.get("email", "").strip().lower()
+    code = re.sub(r"\D", "", request.form.get("otp", ""))
+    user = db().execute("SELECT * FROM users WHERE email=? AND email_verified=0", (email,)).fetchone()
+    record = None
+    if user and len(code) == 6:
+        digest = verification_otp_digest(user["id"], code)
+        record = db().execute("SELECT * FROM email_tokens WHERE user_id=? AND token_hash=? AND purpose='verify' AND used=0",
+                              (user["id"], digest)).fetchone()
+    if not record or parse_dt(record["expires_at"]) < datetime.now():
+        flash("That verification code is incorrect or expired.", "error")
+        return render_template("auth.html", mode="check_email", email=email), 400
+    db().execute("UPDATE users SET email_verified=1,updated_at=? WHERE id=?", (datetime.now().isoformat(), user["id"]))
+    db().execute("UPDATE email_tokens SET used=1 WHERE id=?", (record["id"],)); db().commit()
+    session.clear(); session["user_id"] = user["id"]; session["session_version"] = user["session_version"]
+    session["csrf_token"] = secrets.token_urlsafe(32); session.permanent = True
+    flash("Email verified. Welcome to IntelliFast.", "success")
+    return redirect(url_for("onboarding"))
+
+
 @app.route("/verify-email/<token>")
 def verify_email(token):
+    """Honor links sent before the OTP rollout until they expire."""
     digest = hashlib.sha256(token.encode()).hexdigest()
     record = db().execute("SELECT * FROM email_tokens WHERE token_hash=? AND purpose='verify' AND used=0", (digest,)).fetchone()
     if not record or parse_dt(record["expires_at"]) < datetime.now():
@@ -698,15 +744,17 @@ def resend_verification():
     email = request.form.get("email", "").strip().lower()
     user = db().execute("SELECT * FROM users WHERE email=? AND email_verified=0", (email,)).fetchone()
     if user:
-        token = create_email_token(user["id"], "verify", hours=24)
-        verify_url = f"{app_base_url()}{url_for('verify_email', token=token)}"
+        otp = create_verification_otp()
         try:
-            send_transactional_email(email, "Verify your IntelliFast email", "Confirm your email",
-                                     "Confirm this email address to activate your IntelliFast account.", "Verify email", verify_url)
+            send_transactional_email(email, "Your new IntelliFast verification code", "Confirm your email",
+                                     "Enter this 6-digit code in IntelliFast within 10 minutes. Only the newest code works.",
+                                     otp_code=otp)
+            store_verification_otp(user["id"], otp)
         except RuntimeError:
-            pass
-    flash("If verification is pending, a new email has been sent.", "success")
-    return redirect(url_for("login"))
+            flash("We could not send a new code right now. Please try again shortly.", "error")
+            return render_template("auth.html", mode="check_email", email=email), 503
+    flash("If verification is pending, a new code has been sent.", "success")
+    return render_template("auth.html", mode="check_email", email=email)
 
 
 @app.route("/logout")

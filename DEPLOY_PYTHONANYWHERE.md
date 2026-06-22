@@ -34,6 +34,10 @@ In the **Files** tab, create `/home/intelligain/IntelliFast/.env`:
 SECRET_KEY=generate-a-long-random-value
 GEMINI_API_KEY=paste-your-new-gemini-key
 GEMINI_MODEL=gemini-2.5-flash
+BREVO_API_KEY=paste-your-brevo-api-key
+MAIL_FROM_EMAIL=a-verified-sender@your-domain.com
+MAIL_FROM_NAME=IntelliFast
+APP_BASE_URL=https://intelligain.pythonanywhere.com
 ```
 
 Never upload the local `.env` or expose this server file publicly.
@@ -67,8 +71,7 @@ The app creates `/home/intelligain/IntelliFast/intellifast.db` automatically on 
 ## 5. Verify
 
 - Open `https://intelligain.pythonanywhere.com/health` and confirm `status: ok`.
-- Register a new account and finish onboarding.
+- Register a new account, enter the emailed 6-digit code, and finish onboarding.
 - Start and complete a test fast.
 - Open AI Buddy and send a message to Lumi.
 - Download a CSV export.
-
